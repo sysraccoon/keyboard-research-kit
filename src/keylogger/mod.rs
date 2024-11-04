@@ -1,15 +1,15 @@
-use chrono::{DateTime, Utc};
+mod key_events;
+use key_events::{serialize_events, EventChunkWriter, KeyEventAction, KeyLogEvent, KeyLogFormat};
+
 use clap::Parser;
-use evdev_rs::enums::{EventCode, EventType, EV_KEY};
-use evdev_rs::{Device, DeviceWrapper, ReadFlag, TimeVal};
-use serde::{Deserialize, Serialize};
+use evdev_rs::enums::{EventCode, EventType};
+use evdev_rs::{Device, DeviceWrapper, ReadFlag};
 use std::fs::{self, read_dir, File};
-use std::io::{self, BufWriter, Read, Write};
+use std::io::{self, Read, Write};
 use std::os::unix::fs::FileTypeExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process;
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
 
 const MAX_CHUNK_SIZE: usize = 1024 * 10;
 
@@ -22,7 +22,7 @@ pub struct KeyLoggerArguments {
 #[derive(Parser, Debug)]
 enum KeyLoggerSubCommand {
     Start(StartKeyLoggerArguments),
-    ParseLog(ParseKeyLogFileArguments),
+    ConvertLog(ConvertKeyLogFileArgument),
 }
 
 #[derive(Parser, Debug)]
@@ -32,98 +32,30 @@ pub struct StartKeyLoggerArguments {
 
     #[arg(long = "output-directory", short = 'o', default_value = "./output")]
     output_directory: String,
+
+    #[arg(long = "output-format", short = 'f', default_value_t, value_enum)]
+    output_format: KeyLogFormat,
 }
 
 #[derive(Parser, Debug)]
-pub struct ParseKeyLogFileArguments {
+pub struct ConvertKeyLogFileArgument {
     #[arg()]
     input_path: String,
-}
 
-#[allow(non_camel_case_types)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-enum KeyEventAction {
-    KEY_RELEASE = 0,
-    KEY_PRESS = 1,
-    KEY_REPEAT = 2,
-}
+    #[arg()]
+    output_path: String,
 
-impl KeyEventAction {
-    pub const fn from_int(code: i32) -> Option<KeyEventAction> {
-        match code {
-            0 => Some(KeyEventAction::KEY_RELEASE),
-            1 => Some(KeyEventAction::KEY_PRESS),
-            2 => Some(KeyEventAction::KEY_REPEAT),
-            _ => None,
-        }
-    }
-}
+    #[arg(long = "input-format", default_value_t, value_enum)]
+    input_format: KeyLogFormat,
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-struct KeyLogEvent {
-    time: TimeVal,
-    action: KeyEventAction,
-    code: EV_KEY,
-}
-
-#[derive(Debug)]
-struct EventChunkWriter {
-    buffer: Vec<KeyLogEvent>,
-    output_directory: PathBuf,
-    max_chunk_size: usize,
-}
-
-impl EventChunkWriter {
-    fn new(output_directory: &Path, max_chunk_size: usize) -> EventChunkWriter {
-        assert!(output_directory.is_dir());
-        EventChunkWriter {
-            buffer: vec![],
-            output_directory: output_directory.to_owned(),
-            max_chunk_size,
-        }
-    }
-
-    fn add(&mut self, event: KeyLogEvent) -> Result<(), Box<dyn std::error::Error>> {
-        self.buffer.push(event);
-
-        if self.buffer.len() >= self.max_chunk_size {
-            return self.flush();
-        }
-
-        Ok(())
-    }
-
-    fn flush(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        if !self.buffer.is_empty() {
-
-            let serialized_buffer = bincode::serialize(&self.buffer)?;
-
-            let now = SystemTime::now();
-            let now: DateTime<Utc> = now.into();
-            let now = now.format("%Y-%m-%dT%H:%M:%S");
-
-            let filename = now.to_string() + ".log";
-            let output_path = self.output_directory.join(filename);
-            println!("flush to {}", output_path.to_str().unwrap());
-
-            let output_file = File::options()
-                .write(true)
-                .create_new(true)
-                .open(output_path)?;
-
-            let mut output_writer = BufWriter::new(output_file);
-            output_writer.write_all(&serialized_buffer)?;
-            self.buffer.clear();
-        }
-
-        Ok(())
-    }
+    #[arg(long = "output-format")]
+    output_format: KeyLogFormat,
 }
 
 pub fn keylogger(args: KeyLoggerArguments) -> Result<(), Box<dyn std::error::Error>> {
     match args.subcommand {
         KeyLoggerSubCommand::Start(subcommand_args) => run_keylogger(subcommand_args)?,
-        KeyLoggerSubCommand::ParseLog(subcommand_args) => parse_log_file(subcommand_args)?,
+        KeyLoggerSubCommand::ConvertLog(subcommand_args) => convert_log_file(subcommand_args)?,
     };
 
     Ok(())
@@ -137,6 +69,7 @@ pub fn run_keylogger(args: StartKeyLoggerArguments) -> Result<(), Box<dyn std::e
     let event_writer = Arc::new(Mutex::new(EventChunkWriter::new(
         output_directory,
         MAX_CHUNK_SIZE,
+        args.output_format,
     )));
 
     let auto_flush_writer = Arc::clone(&event_writer);
@@ -197,16 +130,26 @@ fn get_device(device_path_or_name: &str) -> Result<Device, std::io::Error> {
     ))
 }
 
-pub fn parse_log_file(args: ParseKeyLogFileArguments) -> Result<(), Box<dyn std::error::Error>> {
+pub fn convert_log_file(args: ConvertKeyLogFileArgument) -> Result<(), Box<dyn std::error::Error>> {
     let input_file = Path::new(&args.input_path);
     let mut input_file = File::options()
         .read(true)
         .open(input_file)?;
-    let mut input_buf: Vec<u8> = vec![];
+    let mut input_buf: Vec<u8> = Vec::new();
     input_file.read_to_end(&mut input_buf)?;
-    let input_events: Vec<KeyLogEvent> = bincode::deserialize(&input_buf)?;
-    let json_events = serde_json::to_string_pretty(&input_events)?;
-    println!("{}", json_events);
+    let input_events: Vec<KeyLogEvent> = match args.input_format {
+        KeyLogFormat::Binary => bincode::deserialize(&input_buf)?,
+        KeyLogFormat::Json => serde_json::from_str(std::str::from_utf8(&input_buf)?)?,
+    };
+
+    let serialized_events: Vec<u8> = serialize_events(&input_events, args.output_format)?;
+    let mut output_file = File::options()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(args.output_path)?;
+    output_file.write_all(&serialized_events)?;
+    output_file.flush()?;
 
     Ok(())
 }

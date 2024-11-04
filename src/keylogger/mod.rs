@@ -1,5 +1,5 @@
 mod key_events;
-use key_events::{serialize_events, EventChunkWriter, KeyEventAction, KeyLogEvent, KeyLogFormat};
+use key_events::{compress_data, decompress_data, deserialize_events, serialize_events, EventChunkWriter, KeyEventAction, KeyLogCompressionMethod, KeyLogEvent, KeyLogFormat};
 
 use clap::Parser;
 use evdev_rs::enums::{EventCode, EventType};
@@ -35,6 +35,9 @@ pub struct StartKeyLoggerArguments {
 
     #[arg(long = "output-format", short = 'f', default_value_t, value_enum)]
     output_format: KeyLogFormat,
+
+    #[arg(long = "output-compression-method", short = 'c', default_value_t, value_enum)]
+    output_compression_method: KeyLogCompressionMethod,
 }
 
 #[derive(Parser, Debug)]
@@ -48,8 +51,14 @@ pub struct ConvertKeyLogFileArgument {
     #[arg(long = "input-format", default_value_t, value_enum)]
     input_format: KeyLogFormat,
 
+    #[arg(long = "input-compression-method", default_value_t, value_enum)]
+    input_compression_method: KeyLogCompressionMethod,
+
     #[arg(long = "output-format")]
     output_format: KeyLogFormat,
+
+    #[arg(long = "output-compression-method", default_value_t, value_enum)]
+    output_compression_method: KeyLogCompressionMethod,
 }
 
 pub fn keylogger(args: KeyLoggerArguments) -> Result<(), Box<dyn std::error::Error>> {
@@ -70,6 +79,7 @@ pub fn run_keylogger(args: StartKeyLoggerArguments) -> Result<(), Box<dyn std::e
         output_directory,
         MAX_CHUNK_SIZE,
         args.output_format,
+        args.output_compression_method,
     )));
 
     let auto_flush_writer = Arc::clone(&event_writer);
@@ -137,12 +147,12 @@ pub fn convert_log_file(args: ConvertKeyLogFileArgument) -> Result<(), Box<dyn s
         .open(input_file)?;
     let mut input_buf: Vec<u8> = Vec::new();
     input_file.read_to_end(&mut input_buf)?;
-    let input_events: Vec<KeyLogEvent> = match args.input_format {
-        KeyLogFormat::Binary => bincode::deserialize(&input_buf)?,
-        KeyLogFormat::Json => serde_json::from_str(std::str::from_utf8(&input_buf)?)?,
-    };
+
+    let decompressed_data = decompress_data(input_buf, args.input_compression_method)?;
+    let input_events: Vec<KeyLogEvent> = deserialize_events(&decompressed_data, args.input_format)?;
 
     let serialized_events: Vec<u8> = serialize_events(&input_events, args.output_format)?;
+    let compressed_data = compress_data(&serialized_events, args.output_compression_method)?;
 
     let mut output_file = OpenOptions::new()
         .mode(0o640)
@@ -150,7 +160,7 @@ pub fn convert_log_file(args: ConvertKeyLogFileArgument) -> Result<(), Box<dyn s
         .create(true)
         .truncate(true)
         .open(args.output_path)?;
-    output_file.write_all(&serialized_events)?;
+    output_file.write_all(&compressed_data)?;
     output_file.flush()?;
 
     Ok(())

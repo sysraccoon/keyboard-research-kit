@@ -1,4 +1,4 @@
-use std::{fs::File, io::{BufWriter, Write}, path::{Path, PathBuf}, time::SystemTime};
+use std::{fs::OpenOptions, io::{BufWriter, Write}, os::unix::fs::OpenOptionsExt, path::{Path, PathBuf}, time::SystemTime};
 
 use chrono::{DateTime, Utc};
 use evdev_rs::{enums::EV_KEY, TimeVal};
@@ -87,7 +87,8 @@ impl EventChunkWriter {
             let filename = now.to_string() + ".log";
             let output_path = self.output_directory.join(filename);
 
-            let output_file = File::options()
+            let output_file = OpenOptions::new()
+                .mode(0o640)
                 .write(true)
                 .create_new(true)
                 .open(output_path)?;

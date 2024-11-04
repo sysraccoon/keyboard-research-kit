@@ -4,9 +4,9 @@ use key_events::{serialize_events, EventChunkWriter, KeyEventAction, KeyLogEvent
 use clap::Parser;
 use evdev_rs::enums::{EventCode, EventType};
 use evdev_rs::{Device, DeviceWrapper, ReadFlag};
-use std::fs::{self, read_dir, File};
+use std::fs::{self, read_dir, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 use std::path::Path;
 use std::process;
 use std::sync::{Arc, Mutex};
@@ -143,7 +143,9 @@ pub fn convert_log_file(args: ConvertKeyLogFileArgument) -> Result<(), Box<dyn s
     };
 
     let serialized_events: Vec<u8> = serialize_events(&input_events, args.output_format)?;
-    let mut output_file = File::options()
+
+    let mut output_file = OpenOptions::new()
+        .mode(0o640)
         .write(true)
         .create(true)
         .truncate(true)

@@ -1,7 +1,7 @@
 mod keylogger;
 
 use clap::Parser;
-use keylogger::{run_keylogger, KeyLoggerArguments};
+use keylogger::{keylogger, KeyLoggerArguments};
 
 #[derive(Parser, Debug)]
 #[clap(author = "sysraccoon", version, about)]
@@ -15,10 +15,12 @@ enum AppSubCommand {
     KeyLogger(KeyLoggerArguments),
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = AppArguments::parse();
 
     match args.subcommand {
-        AppSubCommand::KeyLogger(subcommand_args) => run_keylogger(subcommand_args),
-    }
+        AppSubCommand::KeyLogger(subcommand_args) => keylogger(subcommand_args)?,
+    };
+
+    Ok(())
 }

